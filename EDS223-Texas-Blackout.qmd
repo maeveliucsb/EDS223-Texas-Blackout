@@ -1,0 +1,82 @@
+---
+title: "Texas_Blackout_analysis"
+author: "Maeve Li Oak"
+date: '11/7/2025'
+format: html
+editor: visual
+---
+
+### Loading Packages
+
+```{r}
+#loading packages
+#| message: false
+#| warning: false
+library(sf) # vector handling
+library(terra) # raster handling
+library(tidyverse)
+library(tmap) # map making
+library(spData) # spatial data
+library(spDataLarge) # spatial data
+library(viridisLite)
+library(raster)
+library("ggplot2")
+library(mosaic)
+library(stars)
+```
+
+# Loading Data
+
+```{r}
+#loading data 
+#| message: false
+#| warning: false
+#loading night light rasters for feb 7
+feb705 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021038.h08v05.001.2021039064328.tif"))
+feb706 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021038.h08v06.001.2021039064329.tif"))
+
+#loading night light rasters for feb 16
+feb1605 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021047.h08v05.001.2021048091106.tif"))
+feb1606 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021047.h08v06.001.2021048091105.tif"))
+
+#combining 05/06 rasters
+o5rast<- mosaic(feb705, feb1605, fun=mean)
+o6rast<- mosaic(feb706, feb1606, fun=mean)
+
+#loading geopackages for roads, houses 
+roads <- st_read(here::here("data", "gis_osm_roads_free_1.gpkg"),
+                 query = "SELECT * FROM gis_osm_roads_free_1 WHERE fclass='motorway'",
+                 quiet = TRUE) %>%
+                 st_make_valid()
+
+houses <- st_read(here::here("data", "gis_osm_buildings_a_free_1.gpkg"), 
+                  query = "SELECT *
+                  FROM gis_osm_buildings_a_free_1
+                  WHERE(type IS NULL AND name IS NULL)
+                  OR type in ('residential', 'apartments', 'house', 'static_caravan', 'detached')",
+                  quiet = TRUE) %>%
+                  st_make_valid()
+
+#SES
+#st_layers(here::here(data, ACS_2019_5YR_TRACT_48_TEXAS.gdb))
+#SES <- st_read(here::here("data", "ACS_2019_5YR_TRACT_48_TEXAS.gdb"))#returning a dataframe, it's non spatial which is ok! 
+geo <- st_read(here::here('data', 'ACS_2019_5YR_TRACT_48_TEXAS.gdb'),
+               layer = 'ACS_2019_5YR_TRACT_48_TEXAS',
+               quiet = TRUE) %>%
+               st_make_valid()
+income <- st_read(here::here('data', 'ACS_2019_5YR_TRACT_48_TEXAS.gdb'),
+               layer = 'x19_income',
+               quiet = TRUE)
+
+meta <- st_read(here::here('data', 'ACS_2019_5YR_TRACT_48_TEXAS.gdb'),
+               layer = 'TRACT_METADATA_2019',
+               quiet = TRUE) 
+
+```
+
+### Creating a blackout mask
+
+This portion creates a mask which
+
+```{r}
+```
