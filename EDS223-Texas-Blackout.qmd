@@ -8,10 +8,14 @@ editor: visual
 
 ### Loading Packages
 
+This portion of the document loads all the packages necessary to complete the rest of the document. The goal of this project is to analyze the impact of climate change induced extreme weather events through an analysis of the 2021 Texas blackouts. The data for this project will be focused on remotely sensed night lights data as a identifier for areas which lost power.
+
 ```{r}
 #loading packages
 #| message: false
 #| warning: false
+
+
 library(sf) # vector handling
 library(terra) # raster handling
 library(tidyverse)
@@ -20,9 +24,11 @@ library(spData) # spatial data
 library(spDataLarge) # spatial data
 library(viridisLite)
 library(raster)
-library("ggplot2")
+library(ggplot2)
 library(mosaic)
 library(stars)
+library(lwgeom)
+
 ```
 
 # Loading Data
@@ -31,17 +37,6 @@ library(stars)
 #loading data 
 #| message: false
 #| warning: false
-#loading night light rasters for feb 7
-feb705 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021038.h08v05.001.2021039064328.tif"))
-feb706 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021038.h08v06.001.2021039064329.tif"))
-
-#loading night light rasters for feb 16
-feb1605 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021047.h08v05.001.2021048091106.tif"))
-feb1606 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021047.h08v06.001.2021048091105.tif"))
-
-#combining 05/06 rasters
-o5rast<- mosaic(feb705, feb1605, fun=mean)
-o6rast<- mosaic(feb706, feb1606, fun=mean)
 
 #loading geopackages for roads, houses 
 roads <- st_read(here::here("data", "gis_osm_roads_free_1.gpkg"),
@@ -57,17 +52,21 @@ houses <- st_read(here::here("data", "gis_osm_buildings_a_free_1.gpkg"),
                   quiet = TRUE) %>%
                   st_make_valid()
 
-#SES
+#loading Socioeconomic data
+#commented out is loading the dataframe entirely, and reviewing the names of the different layers in order to pull the relevant information 
+
 #st_layers(here::here(data, ACS_2019_5YR_TRACT_48_TEXAS.gdb))
-#SES <- st_read(here::here("data", "ACS_2019_5YR_TRACT_48_TEXAS.gdb"))#returning a dataframe, it's non spatial which is ok! 
+#SES <- st_read(here::here("data", "ACS_2019_5YR_TRACT_48_TEXAS.gdb")) #returning a dataframe, it's non spatial which is ok! 
+#pulling the geometry from the dataset
 geo <- st_read(here::here('data', 'ACS_2019_5YR_TRACT_48_TEXAS.gdb'),
                layer = 'ACS_2019_5YR_TRACT_48_TEXAS',
                quiet = TRUE) %>%
-               st_make_valid()
+               st_make_valid() 
+#pulling the income variable 
 income <- st_read(here::here('data', 'ACS_2019_5YR_TRACT_48_TEXAS.gdb'),
                layer = 'x19_income',
-               quiet = TRUE)
-
+               quiet = TRUE) 
+#extracting the metadata
 meta <- st_read(here::here('data', 'ACS_2019_5YR_TRACT_48_TEXAS.gdb'),
                layer = 'TRACT_METADATA_2019',
                quiet = TRUE) 
@@ -76,7 +75,123 @@ meta <- st_read(here::here('data', 'ACS_2019_5YR_TRACT_48_TEXAS.gdb'),
 
 ### Creating a blackout mask
 
-This portion creates a mask which
+This portion creates a mask which indicates whether or not a Texas cell experienced a blackout.
+
+In order to do this properly I first need to find the change in night lights caused by the storm, which requires me to make a raster object for each day, this means combining light data from two areas (area 05, and area 06) of Texas into a raster for each day (Feb 7th and 16th).
 
 ```{r}
+# #loading night light rasters for feb 7
+ feb705 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021038.h08v05.001.2021039064328.tif"))
+ feb706 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021038.h08v06.001.2021039064329.tif"))
+# 
+# #loading night light rasters for feb 16
+feb1605 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021047.h08v05.001.2021048091106.tif"))
+feb1606 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021047.h08v06.001.2021048091105.tif"))
+# 
+# #combining 05/06 rasters
+# rast16<- mosaic(feb1606, feb1605, fun=mean)
+# rast7<- mosaic(feb706, feb705, fun=mean)
 ```
+
+I now need to reclassify the difference raster, to assume that any location which experienced a drop of more than 200 nW cm-2sr-1 also experienced a blackout. 
+
+```{r}
+t7_05  <- terra::rast(here::here("data","VNP46A1","VNP46A1.A2021038.h08v05.001.2021039064328.tif"))
+t7_06  <- terra::rast(here::here("data","VNP46A1","VNP46A1.A2021038.h08v06.001.2021039064329.tif"))
+t16_05 <- terra::rast(here::here("data","VNP46A1","VNP46A1.A2021047.h08v05.001.2021048091106.tif"))
+t16_06 <- terra::rast(here::here("data","VNP46A1","VNP46A1.A2021047.h08v06.001.2021048091105.tif"))
+
+r7  <- terra::merge(t7_05,  t7_06)
+r16 <- terra::merge(t16_05, t16_06)
+
+tmp7  <- tempfile(fileext = ".tif")
+tmp16 <- tempfile(fileext = ".tif")
+rast7  <- mosaic(feb706,  feb705,  fun = mean, filename = tmp7,  overwrite = TRUE)  # RasterLayer
+rast16 <- mosaic(feb1606, feb1605, fun = mean, filename = tmp16, overwrite = TRUE)  # RasterLayer
+
+if (!compareRaster(rast7, rast16, extent=TRUE, rowcol=TRUE, crs=TRUE, res=TRUE, stopiffalse=FALSE)) {
+  rast16 <- projectRaster(rast16, rast7, method = "bilinear")
+}
+
+# 3) Difference + threshold (STILL raster, no terra objects here)
+diff_bool <- (rast7 - rast16) > 200     # RasterLayer TRUE/FALSE
+diff_bool[diff_bool == 0] <- NA    
+
+mask_t   <- terra::rast(diff_bool)      # SpatRaster
+diffvect <- terra::as.polygons(mask_t, dissolve=TRUE, na.rm=TRUE) |>
+            sf::st_as_sf() |>
+            sf::st_make_valid()
+
+```
+
+```{r}
+# # check crs
+# st_crs(rast16) # WGS84
+# st_crs(rast7) # WGS84
+# 
+# # do the 2 extents match?
+# if(ext(rast16) == ext(rast7)){
+#   print("extents match")
+# } else{
+#   print("extents do not match")
+# }
+# 
+# #conditional difference
+# diff <- rast7 - rast16 > 200 #making a boolean
+# #making those false's NA
+# diff <- diff[diff == FALSE] <- NA
+# class(diff)
+# diff <- st_as_stars(diff)
+```
+Now vectorize! turning from a raster to a vector, to make a vector difference mask. 
+
+```{r}
+# diffvect <- st_as_sf(diff) %>%
+#   st_make_valid()
+```
+Then we crop
+```{r}
+#cropping to a bbox
+crop_bbox <-st_bbox(c(
+                     xmin = -96.5,
+                     ymin = 29,
+                     xmax = -94.50,
+                     ymax = 30.5),
+crs = st_crs(diffvect))
+#adding that as a layer
+crop <- st_as_sfc(crop_bbox)
+#cropping the dataset
+croppeddiff <- diffvect[crop,]
+st_bbox(croppeddiff)
+#changing the CRS
+croppeddiff <- croppeddiff %>%
+  st_transform('EPSG:3083')
+
+```
+Excluding highways from the cropped blackout mask. 
+```{r}
+#transforming into a crs with meters
+transroad <- roads %>%
+  st_transform('ESRI:102009')
+roads <- roads %>%
+  st_transform('ESRI:102009')
+croppeddiff <- croppeddiff %>%
+  st_transform('ESRI:102009')
+#buffering for within 200 meters 
+transroad <- st_buffer(transroad, 200)
+#using St_union-kills my computer, doesn't work
+#st_union(transroad,roads)
+transroadbuff <- st_union(transroad)
+
+```
+identify the number of homes likely impacted by blackouts
+```{r}
+
+no_freeway <-st_difference(croppeddiff, transroadbuff)
+tm_shape(no_freeway)+
+  tm_polygons(col='green') +
+  tm_basemap('OpenStreetMap')
+```
+
+
+
