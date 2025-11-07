@@ -83,17 +83,12 @@ In order to do this properly I first need to find the change in night lights cau
 # #loading night light rasters for feb 7
  feb705 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021038.h08v05.001.2021039064328.tif"))
  feb706 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021038.h08v06.001.2021039064329.tif"))
-# 
 # #loading night light rasters for feb 16
 feb1605 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021047.h08v05.001.2021048091106.tif"))
 feb1606 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021047.h08v06.001.2021048091105.tif"))
-# 
-# #combining 05/06 rasters
-# rast16<- mosaic(feb1606, feb1605, fun=mean)
-# rast7<- mosaic(feb706, feb705, fun=mean)
 ```
 
-I now need to reclassify the difference raster, to assume that any location which experienced a drop of more than 200 nW cm-2sr-1 also experienced a blackout. 
+I now need to reclassify the difference raster, to assume that any location which experienced a drop of more than 200 nW cm-2sr-1 also experienced a blackout.
 
 ```{r}
 t7_05  <- terra::rast(here::here("data","VNP46A1","VNP46A1.A2021038.h08v05.001.2021039064328.tif"))
@@ -143,32 +138,49 @@ diffvect <- terra::as.polygons(mask_t, dissolve=TRUE, na.rm=TRUE) |>
 # class(diff)
 # diff <- st_as_stars(diff)
 ```
-Now vectorize! turning from a raster to a vector, to make a vector difference mask. 
+
+Now vectorize! turning from a raster to a vector, to make a vector difference mask.
 
 ```{r}
-# diffvect <- st_as_sf(diff) %>%
-#   st_make_valid()
+ # diffvect <- st_as_sf(diff) %>%
+ #  st_make_valid()
 ```
+
 Then we crop
+
 ```{r}
 #cropping to a bbox
-crop_bbox <-st_bbox(c(
-                     xmin = -96.5,
-                     ymin = 29,
-                     xmax = -94.50,
-                     ymax = 30.5),
-crs = st_crs(diffvect))
-#adding that as a layer
-crop <- st_as_sfc(crop_bbox)
-#cropping the dataset
-croppeddiff <- diffvect[crop,]
-st_bbox(croppeddiff)
-#changing the CRS
-croppeddiff <- croppeddiff %>%
-  st_transform('EPSG:3083')
+# crop_bbox <-st_bbox(c(
+#                      xmin = -96.5,
+#                      ymin = 29,
+#                      xmax = -94.50,
+#                      ymax = 30.5),
+# crs = st_crs(diffvect))
+# #adding that as a layer
+# crop <- st_as_sfc(crop_bbox)
+# #cropping the dataset
+# croppeddiff <- diffvect[crop,]
+# st_bbox(croppeddiff)
+# #changing the CRS
+# croppeddiff <- croppeddiff %>%
+#   st_transform('EPSG:3083')
+#transforming
+diff_ll <- st_transform(diffvect, 4326)
+
+#cropping to a bbox
+croppeddiff <- st_crop(
+  diff_ll,
+  xmin = -96.5, xmax = -94.50,
+  ymin = 29.0,  ymax = 30.5
+)
+
+#transforming
+croppeddiff <- st_transform(croppeddiff, 3083)
 
 ```
-Excluding highways from the cropped blackout mask. 
+
+Excluding highways from the cropped blackout mask.
+
 ```{r}
 #transforming into a crs with meters
 transroad <- roads %>%
@@ -184,7 +196,9 @@ transroad <- st_buffer(transroad, 200)
 transroadbuff <- st_union(transroad)
 
 ```
+
 identify the number of homes likely impacted by blackouts
+
 ```{r}
 
 no_freeway <-st_difference(croppeddiff, transroadbuff)
@@ -192,6 +206,127 @@ tm_shape(no_freeway)+
   tm_polygons(col='green') +
   tm_basemap('OpenStreetMap')
 ```
+# Maps 1 and 2
+These maps illustrate the night light intensity before and after the first two storms
+```{r}
+tmap_mode("plot") 
 
+# Changing everyone's CRS to match
+r7_3083  <- terra::project(terra::rast(rast7),  "EPSG:3083", method = "bilinear")
+r16_3083 <- terra::project(terra::rast(rast16), "EPSG:3083", method = "bilinear")
+roads_3083       <- sf::st_transform(roads, 3083)
+diffvect_3083    <- sf::st_transform(diffvect, 3083)
+croppeddiff_3083 <- sf::st_transform(croppeddiff, 3083)
+transroadbuff_3083 <- sf::st_transform(transroadbuff, 3083)
 
+# making no highway data (but also the same CRS)
+no_highway_3083 <- try(
+  sf::st_difference(croppeddiff_3083, transroadbuff_3083),
+  silent = TRUE
+)
+if (inherits(no_highway_3083, "try-error")) {
+  touch <- lengths(sf::st_intersects(croppeddiff_3083, transroadbuff_3083)) > 0
+  keep  <- croppeddiff_3083[!touch, , drop=FALSE]
+  cut   <- sf::st_difference(croppeddiff_3083[touch, , drop=FALSE], transroadbuff_3083)
+  cut   <- cut[!sf::st_is_empty(cut), , drop=FALSE]
+  no_highway_3083 <- rbind(keep, cut)
+}
 
+# Cropping to match the BBOX
+bb3083 <- sf::st_as_sfc(sf::st_bbox(croppeddiff_3083))
+r7_3083   <- terra::crop(r7_3083,   terra::vect(bb3083))
+r16_3083  <- terra::crop(r16_3083,  terra::vect(bb3083))
+
+# Making the maps
+m_before <- tm_shape(r7_3083) +
+  tm_raster(style = "cont", palette = viridisLite::magma(9), title = "Radiance (Feb 7)") +
+  tm_shape(roads_3083) + tm_lines(col = "grey30", lwd = 0.6) +
+#  tm_basemap('OpenStreetMap')+
+  tm_layout(frame = FALSE)
+
+m_after <- tm_shape(r16_3083) +
+  tm_raster(style = "cont", palette = viridisLite::magma(9), title = "Radiance (Feb 16)") +
+  tm_shape(roads_3083) + tm_lines(col = "grey30", lwd = 0.6) +
+#  tm_basemap('OpenStreetMap')+
+  tm_layout(frame = FALSE)
+
+m_mask <- tm_shape(croppeddiff_3083) +
+  tm_polygons(col = "tomato", alpha = 0.6, title = "Blackout mask (>200)") +
+  tm_shape(roads_3083) + tm_lines(col = "grey30", lwd = 0.6) +
+  tm_basemap('OpenStreetMap')+
+  tm_layout(frame = FALSE)
+
+m_nohwy <- tm_shape(no_highway_3083) +
+  tm_polygons(col = "forestgreen", alpha = 0.6, title = "Mask minus 200 m highways") +
+  tm_shape(transroadbuff_3083) + tm_borders(col = "grey50", lwd = 0.6) +
+  tm_shape(roads_3083) + tm_lines(col = "grey30", lwd = 0.6) +
+  tm_basemap('OpenStreetMap')+
+  tm_layout(frame = FALSE)
+
+tmap_arrange(m_before, m_after, m_mask, m_nohwy, ncol = 2)
+
+```
+# Map of homes in Huston that lost power
+```{r}
+#filtering for homes that lost power
+#subtracting R7-R16 (m_difference)
+vis_bool <- (r16_3083 - r7_3083 ) < 200  
+diff_3083 <- r16_3083 - r7_3083 
+
+mm <- terra::global(vis_bool, c("min","max"), na.rm=TRUE)
+maxabs <- max(abs(mm[1,1]), abs(mm[1,2]))
+brks <- seq(-maxabs, maxabs, length.out = 11)
+
+m_difference <- tm_shape(vis_bool) +
+  tm_raster(
+    title   = expression("Homes that lost power (Feb 16 - Feb 7), Measured by Change in Radiance"),
+    breaks  = brks, style="pretty",
+    palette = "RdPu"  
+  ) +
+  tm_shape(roads_3083) + tm_lines(col = "black", lwd = 0.6) +
+  tm_layout(frame = FALSE)
+
+mask_gt200_3083 <- terra::ifel(vis_bool > 200, 1, NA)
+
+m_diff_mask <- m_difference +
+  tm_shape(mask_gt200_3083) + tm_raster(alpha=0.35, palette=c("#000000"), legend.show=FALSE)
+
+m_diff_mask
+#mapping the difference
+```
+# Estimate of the number of homes in Huston that lost power
+```{r}
+#| message: false
+#| warning: false
+
+# Assuming 'r' is your SpatRaster object
+# If you don't have a SpatRaster object, you can create one for testing
+vis_bool <- rast(nrows=10, ncols=10, xmin=-180, ymin=-90)
+values(vis_bool) <- 1:ncell(vis_bool)
+
+# 1. Extract coordinates and values
+coords <- crds(vis_bool)
+vals <- values(vis_bool)
+
+# 2. Combine into a data frame
+vis_bool_df <- data.frame(X = coords[,1],
+                 Y = coords[,2],
+                 Value = vals)
+
+# 3. Write to CSV
+write.csv(vis_bool_df, "vis_bool_df.csv", row.names = FALSE)
+
+vis_bool %>% 
+  group_by(grade) %>% 
+   summarise(Percent = round((n() / 8988) * 100, 1)) %>% #number of observations in the group, divided by total rows, multiplied by 100, and rounded to 1 decimal place
+  mutate(Percent = paste0(Percent, "%")) %>% 
+  rename(HOLC_Grade = grade) %>%   # capitalizing
+  st_drop_geometry() %>% 
+  # creating the table
+  kbl(booktabs = T, caption = "Proportion of Census Block groups") %>%
+  kable_styling(latex_options = "striped")
+```
+# (GG)Plot comparing the distributions of median household income for census tracts that did and did not experience blackouts
+```{r}
+```
+# Result Summary
