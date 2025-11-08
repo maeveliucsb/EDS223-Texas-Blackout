@@ -21,13 +21,13 @@ library(terra) # raster handling
 library(tidyverse)
 library(tmap) # map making
 library(spData) # spatial data
-library(spDataLarge) # spatial data
-library(viridisLite)
-library(raster)
-library(ggplot2)
-library(mosaic)
-library(stars)
+library(viridisLite) #palettes for maps
+library(raster) #loading raster data
+library(ggplot2) #making tables
+library(mosaic) #combining rasters into one raster
+library(stars) #working with specific data frames
 library(lwgeom)
+library(here)
 
 ```
 
@@ -54,7 +54,7 @@ houses <- st_read(here::here("data", "gis_osm_buildings_a_free_1.gpkg"),
 
 #loading Socioeconomic data
 #commented out is loading the dataframe entirely, and reviewing the names of the different layers in order to pull the relevant information 
-
+#looking at the different layers of the dataset to be able to pull the ones I need
 #st_layers(here::here(data, ACS_2019_5YR_TRACT_48_TEXAS.gdb))
 #SES <- st_read(here::here("data", "ACS_2019_5YR_TRACT_48_TEXAS.gdb")) #returning a dataframe, it's non spatial which is ok! 
 #pulling the geometry from the dataset
@@ -91,90 +91,52 @@ feb1606 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021047.h08v06.001.202
 I now need to reclassify the difference raster, to assume that any location which experienced a drop of more than 200 nW cm-2sr-1 also experienced a blackout.
 
 ```{r}
+#loading the data as a terra object so it's easier to work with. each day has two .tif (05/06) files whcih account for two different areas of Huston
 t7_05  <- terra::rast(here::here("data","VNP46A1","VNP46A1.A2021038.h08v05.001.2021039064328.tif"))
 t7_06  <- terra::rast(here::here("data","VNP46A1","VNP46A1.A2021038.h08v06.001.2021039064329.tif"))
 t16_05 <- terra::rast(here::here("data","VNP46A1","VNP46A1.A2021047.h08v05.001.2021048091106.tif"))
 t16_06 <- terra::rast(here::here("data","VNP46A1","VNP46A1.A2021047.h08v06.001.2021048091105.tif"))
-
+#combining the data for each day (feb 7 and 16th)
 r7  <- terra::merge(t7_05,  t7_06)
 r16 <- terra::merge(t16_05, t16_06)
 
 tmp7  <- tempfile(fileext = ".tif")
 tmp16 <- tempfile(fileext = ".tif")
-rast7  <- mosaic(feb706,  feb705,  fun = mean, filename = tmp7,  overwrite = TRUE)  # RasterLayer
-rast16 <- mosaic(feb1606, feb1605, fun = mean, filename = tmp16, overwrite = TRUE)  # RasterLayer
-
+#turning them into one Raster
+rast7  <- mosaic(feb706,  feb705,  fun = mean, filename = tmp7,  overwrite = TRUE) 
+rast16 <- mosaic(feb1606, feb1605, fun = mean, filename = tmp16, overwrite = TRUE)  
+#checking to make sure that the extents of the new raster are still the same
 if (!compareRaster(rast7, rast16, extent=TRUE, rowcol=TRUE, crs=TRUE, res=TRUE, stopiffalse=FALSE)) {
   rast16 <- projectRaster(rast16, rast7, method = "bilinear")
 }
-
-# 3) Difference + threshold (STILL raster, no terra objects here)
-diff_bool <- (rast7 - rast16) > 200     # RasterLayer TRUE/FALSE
+```
+I then take every value with a radiance that's less than 200, consider that as a blackout, and make a difference boolean where more than 200 is considered true, and less than 200 is considered false. Then I make a mask and turn it into a vector. 
+```{r}
+# making a difference Boolean (less than 200 is considered a blackout)
+diff_bool <- (rast7 - rast16) > 200     # TRUE/FALSE
 diff_bool[diff_bool == 0] <- NA    
-
-mask_t   <- terra::rast(diff_bool)      # SpatRaster
+#adding the mask and making it into a vector
+mask_t   <- terra::rast(diff_bool)   
 diffvect <- terra::as.polygons(mask_t, dissolve=TRUE, na.rm=TRUE) |>
             sf::st_as_sf() |>
             sf::st_make_valid()
 
 ```
 
-```{r}
-# # check crs
-# st_crs(rast16) # WGS84
-# st_crs(rast7) # WGS84
-# 
-# # do the 2 extents match?
-# if(ext(rast16) == ext(rast7)){
-#   print("extents match")
-# } else{
-#   print("extents do not match")
-# }
-# 
-# #conditional difference
-# diff <- rast7 - rast16 > 200 #making a boolean
-# #making those false's NA
-# diff <- diff[diff == FALSE] <- NA
-# class(diff)
-# diff <- st_as_stars(diff)
-```
-
-Now vectorize! turning from a raster to a vector, to make a vector difference mask.
+Then I crop to just the Huston area
 
 ```{r}
- # diffvect <- st_as_sf(diff) %>%
- #  st_make_valid()
-```
-
-Then we crop
-
-```{r}
-#cropping to a bbox
-# crop_bbox <-st_bbox(c(
-#                      xmin = -96.5,
-#                      ymin = 29,
-#                      xmax = -94.50,
-#                      ymax = 30.5),
-# crs = st_crs(diffvect))
-# #adding that as a layer
-# crop <- st_as_sfc(crop_bbox)
-# #cropping the dataset
-# croppeddiff <- diffvect[crop,]
-# st_bbox(croppeddiff)
-# #changing the CRS
-# croppeddiff <- croppeddiff %>%
-#   st_transform('EPSG:3083')
-#transforming
+#transforming CRS
 diff_ll <- st_transform(diffvect, 4326)
 
-#cropping to a bbox
+#cropping to a bbox, to the Huston area
 croppeddiff <- st_crop(
   diff_ll,
   xmin = -96.5, xmax = -94.50,
   ymin = 29.0,  ymax = 30.5
 )
 
-#transforming
+#transforming CRS again
 croppeddiff <- st_transform(croppeddiff, 3083)
 
 ```
@@ -192,22 +154,23 @@ croppeddiff <- croppeddiff %>%
 #buffering for within 200 meters 
 transroad <- st_buffer(transroad, 200)
 #using St_union-kills my computer, doesn't work
-#st_union(transroad,roads)
 transroadbuff <- st_union(transroad)
 
 ```
 
-identify the number of homes likely impacted by blackouts
+This map visualizes the amount of homes likely impacted by blackouts 
 
 ```{r}
-
 no_freeway <-st_difference(croppeddiff, transroadbuff)
 tm_shape(no_freeway)+
   tm_polygons(col='green') +
   tm_basemap('OpenStreetMap')
 ```
+
 # Maps 1 and 2
-These maps illustrate the night light intensity before and after the first two storms
+
+These maps illustrate the night light intensity before and after the first two storms. The top two maps illustrate radiance before the storm (Feb 7) and after the storm (Feb 16). These maps illustrate the scope of the blackouts during the February storms. 
+
 ```{r}
 tmap_mode("plot") 
 
@@ -239,34 +202,39 @@ r16_3083  <- terra::crop(r16_3083,  terra::vect(bb3083))
 
 # Making the maps
 m_before <- tm_shape(r7_3083) +
-  tm_raster(style = "cont", palette = viridisLite::magma(9), title = "Radiance (Feb 7)") +
+  tm_raster(style = "cont", palette = rev(viridisLite::magma(9)), title = "Radiance (Feb 7)") +
   tm_shape(roads_3083) + tm_lines(col = "grey30", lwd = 0.6) +
 #  tm_basemap('OpenStreetMap')+
   tm_layout(frame = FALSE)
 
 m_after <- tm_shape(r16_3083) +
-  tm_raster(style = "cont", palette = viridisLite::magma(9), title = "Radiance (Feb 16)") +
+  tm_raster(style = "cont", palette = rev(viridisLite::magma(9)), title = "Radiance (Feb 16)") +
   tm_shape(roads_3083) + tm_lines(col = "grey30", lwd = 0.6) +
+  tm_title()
 #  tm_basemap('OpenStreetMap')+
   tm_layout(frame = FALSE)
 
-m_mask <- tm_shape(croppeddiff_3083) +
-  tm_polygons(col = "tomato", alpha = 0.6, title = "Blackout mask (>200)") +
-  tm_shape(roads_3083) + tm_lines(col = "grey30", lwd = 0.6) +
-  tm_basemap('OpenStreetMap')+
-  tm_layout(frame = FALSE)
+#Exploratory maps that I didn't want to delete
 
-m_nohwy <- tm_shape(no_highway_3083) +
-  tm_polygons(col = "forestgreen", alpha = 0.6, title = "Mask minus 200 m highways") +
-  tm_shape(transroadbuff_3083) + tm_borders(col = "grey50", lwd = 0.6) +
-  tm_shape(roads_3083) + tm_lines(col = "grey30", lwd = 0.6) +
-  tm_basemap('OpenStreetMap')+
-  tm_layout(frame = FALSE)
+# m_mask <- tm_shape(croppeddiff_3083) +
+#   tm_polygons(col = "tomato", alpha = 0.6, title = "Blackout mask (>200)") +
+#   tm_shape(roads_3083) + tm_lines(col = "grey30", lwd = 0.6) +
+#   tm_basemap('OpenStreetMap')+
+#   tm_layout(frame = FALSE)
+# 
+# m_nohwy <- tm_shape(no_highway_3083) +
+#   tm_polygons(col = "forestgreen", alpha = 0.6, title = "Mask minus 200 m highways") +
+#   tm_shape(transroadbuff_3083) + tm_borders(col = "grey50", lwd = 0.6) +
+#   tm_shape(roads_3083) + tm_lines(col = "grey30", lwd = 0.6) +
+#   tm_basemap('OpenStreetMap')+
+#   tm_layout(frame = FALSE)
 
-tmap_arrange(m_before, m_after, m_mask, m_nohwy, ncol = 2)
+tmap_arrange(m_before, m_after, ncol = 2)
 
 ```
+
 # Map of homes in Huston that lost power
+
 ```{r}
 #filtering for homes that lost power
 #subtracting R7-R16 (m_difference)
@@ -279,9 +247,9 @@ brks <- seq(-maxabs, maxabs, length.out = 11)
 
 m_difference <- tm_shape(vis_bool) +
   tm_raster(
-    title   = expression("Homes that lost power (Feb 16 - Feb 7), Measured by Change in Radiance"),
+    title   = expression("Homes that lost power (Feb 16 - Feb 7)"),
     breaks  = brks, style="pretty",
-    palette = "RdPu"  
+    palette = "-RdPu"  
   ) +
   tm_shape(roads_3083) + tm_lines(col = "black", lwd = 0.6) +
   tm_layout(frame = FALSE)
@@ -294,39 +262,26 @@ m_diff_mask <- m_difference +
 m_diff_mask
 #mapping the difference
 ```
+
 # Estimate of the number of homes in Huston that lost power
+
 ```{r}
 #| message: false
 #| warning: false
 
-# Assuming 'r' is your SpatRaster object
-# If you don't have a SpatRaster object, you can create one for testing
-vis_bool <- rast(nrows=10, ncols=10, xmin=-180, ymin=-90)
-values(vis_bool) <- 1:ncell(vis_bool)
-
-# 1. Extract coordinates and values
-coords <- crds(vis_bool)
-vals <- values(vis_bool)
-
-# 2. Combine into a data frame
-vis_bool_df <- data.frame(X = coords[,1],
-                 Y = coords[,2],
-                 Value = vals)
-
-# 3. Write to CSV
-write.csv(vis_bool_df, "vis_bool_df.csv", row.names = FALSE)
-
-vis_bool %>% 
-  group_by(grade) %>% 
-   summarise(Percent = round((n() / 8988) * 100, 1)) %>% #number of observations in the group, divided by total rows, multiplied by 100, and rounded to 1 decimal place
-  mutate(Percent = paste0(Percent, "%")) %>% 
-  rename(HOLC_Grade = grade) %>%   # capitalizing
-  st_drop_geometry() %>% 
-  # creating the table
-  kbl(booktabs = T, caption = "Proportion of Census Block groups") %>%
-  kable_styling(latex_options = "striped")
+#figuring out the class of the difference mask
+class(vis_bool) #its a terra function
+#making it so that its a 1, NA terra object
+mask_gt200_3083 <- terra::ifel((r16_3083 - r7_3083) > 200, 1, NA)
+#counting the amount of NAs
+terra::global(!is.na(mask_gt200_3083), fun = "sum")
 ```
+The number of homes in Huston that lost power is 6,425
+
 # (GG)Plot comparing the distributions of median household income for census tracts that did and did not experience blackouts
+
 ```{r}
+
 ```
+
 # Result Summary
