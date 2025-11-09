@@ -5,8 +5,11 @@ date: '11/7/2025'
 format: html
 editor: visual
 ---
+
 ### Read Me Screenshot
+
 ![Screenshot of Readme](ReadmeScreenshot.png)
+
 ### Loading Packages
 
 This portion of the document loads all the packages necessary to complete the rest of the document. The goal of this project is to analyze the impact of climate change induced extreme weather events through an analysis of the 2021 Texas blackouts. The data for this project will be focused on remotely sensed night lights data as a identifier for areas which lost power.
@@ -113,7 +116,9 @@ if (!compareRaster(rast7, rast16, extent=TRUE, rowcol=TRUE, crs=TRUE, res=TRUE, 
   rast16 <- projectRaster(rast16, rast7, method = "bilinear")
 }
 ```
-I then take every value with a radiance that's less than 200, consider that as a blackout, and make a difference boolean where more than 200 is considered true, and less than 200 is considered false. Then I make a mask and turn it into a vector. 
+
+I then take every value with a radiance that's less than 200, consider that as a blackout, and make a difference boolean where more than 200 is considered true, and less than 200 is considered false. Then I make a mask and turn it into a vector.
+
 ```{r}
 # making a difference Boolean (less than 200 is considered a blackout)
 diff_bool <- (rast7 - rast16) > 200     # TRUE/FALSE
@@ -161,7 +166,7 @@ transroadbuff <- st_union(transroad)
 
 ```
 
-This map visualizes the amount of homes likely impacted by blackouts 
+This map visualizes the amount of homes likely impacted by blackouts
 
 ```{r}
 no_freeway <-st_difference(croppeddiff, transroadbuff)
@@ -172,7 +177,7 @@ tm_shape(no_freeway)+
 
 # Maps 1 and 2
 
-These maps illustrate the night light intensity before and after the first two storms. The top two maps illustrate radiance before the storm (Feb 7) and after the storm (Feb 16). These maps illustrate the scope of the blackouts during the February storms. 
+These maps illustrate the night light intensity before and after the first two storms. The top two maps illustrate radiance before the storm (Feb 7) and after the storm (Feb 16). These maps illustrate the scope of the blackouts during the February storms.
 
 ```{r}
 tmap_mode("plot") 
@@ -283,12 +288,15 @@ mask_gt200_3083 <- terra::ifel((r16_3083 - r7_3083) > 200, 1, NA)
 #counting the amount of NAs
 terra::global(!is.na(mask_gt200_3083), fun = "sum")
 ```
+
 The number of homes in Huston that lost power is 6,425
 
 # (GG)Plot comparing the distributions of median household income for census tracts that did and did not experience blackouts
-This portion I'm taking the data which shows where the blackouts were, and then plotting the median household income of those that did and didn't experience blackouts. 
+
+This portion I'm taking the data which shows where the blackouts were, and then plotting the median household income of those that did and didn't experience blackouts.
 
 First I calculate the median income using the 'tidy census' package
+
 ```{r}
 #calculating median income
 income_median <- get_acs(
@@ -298,7 +306,9 @@ income_median <- get_acs(
   year = 2019 #year
 )
 ```
+
 Then I take the geometry of the houses that had the blackouts, and combine that geometry and the true/false boolean with the income data with a left join
+
 ```{r}
 #taking the geometry of the houses who had blackouts 
 geo$blackout <- terra::extract(mask_gt200_3083, geo, fun = mean, na.rm = TRUE)[, 2]
@@ -311,7 +321,9 @@ names(income_median)[2] <- "median_income"
 geo <- geo %>%
   left_join(income_median, by = "GEOID")
 ```
+
 then I plot the whole thing in a ggplot
+
 ```{r}
 #plotting
 ggplot(geo, aes(x = median_income, fill = as.factor(blackout))) +
@@ -330,4 +342,5 @@ ggplot(geo, aes(x = median_income, fill = as.factor(blackout))) +
 ```
 
 # Result Summary
-This document calculates the different effects of large scale climate weather events on different socioeconomic groups through the mapping of the 2020 Huston blackouts, caused by an unprecedentedly large snow storm. A total of over 6,000 homes lost power, primarily in low income areas (a median income of approximately $50,000). These patterns illustrate that low income households appear to bear the brunt of the impacts of large scale climate events, and higher income households are more resillient to the negative effects of climate change
+
+This document calculates the different effects of large scale climate weather events on different socioeconomic groups through the mapping of the 2020 Huston blackouts, caused by an unprecedentedly large snow storm. A total of over 6,000 homes lost power, primarily in low income areas (a median income of approximately \$50,000). These patterns illustrate that low income households appear to bear the brunt of the impacts of large scale climate events, and higher income households are more resillient to the negative effects of climate change
