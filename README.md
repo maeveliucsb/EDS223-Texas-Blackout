@@ -7,7 +7,9 @@ I will be the sole author and contributor to this homework assignment. The assig
 
 # data access
 Night light (VIIRS) data is distributed through NASA’s Level-1 and Atmospheric Archive & Distribution System Distributed Active Archive Center (LAADS DAAC). The data is wrangled and formatted by Ruth Oliver for the purposes of this project. 
+
 Road and housing data is from Open Street Map and can be reached here: https://planet.openstreetmap.org/
+
 Socioeconomic data is from the US Census Bureau and can be found here; https://www.census.gov/programs-surveys/acs
 
 
