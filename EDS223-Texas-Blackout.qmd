@@ -4,6 +4,13 @@ author: "Maeve Li Oak"
 date: '11/7/2025'
 format: html
 editor: visual
+embed-resources: true
+page-loading: false
+code-fold: show
+execute: 
+  warning: false
+  message: false
+toc: TRUE
 ---
 
 ### Loading Packages
@@ -12,32 +19,25 @@ This portion of the document loads all the packages necessary to complete the re
 
 ```{r}
 #loading packages
-#| message: false
-#| warning: false
-
-
 library(sf) # vector handling
 library(terra) # raster handling
 library(tidyverse)
 library(tmap) # map making
 library(spData) # spatial data
-library(spDataLarge) # spatial data
-library(viridisLite)
-library(raster)
-library(ggplot2)
-library(mosaic)
-library(stars)
+library(viridisLite) #palettes for maps
+library(raster) #loading raster data
+library(ggplot2) #making tables
+library(mosaic) #combining rasters into one raster
+library(stars) #working with specific data frames
 library(lwgeom)
+library(here)
+library(tidycensus) #for income data later
 
 ```
 
 # Loading Data
 
 ```{r}
-#loading data 
-#| message: false
-#| warning: false
-
 #loading geopackages for roads, houses 
 roads <- st_read(here::here("data", "gis_osm_roads_free_1.gpkg"),
                  query = "SELECT * FROM gis_osm_roads_free_1 WHERE fclass='motorway'",
@@ -79,36 +79,28 @@ This portion creates a mask which indicates whether or not a Texas cell experien
 
 In order to do this properly I first need to find the change in night lights caused by the storm, which requires me to make a raster object for each day, this means combining light data from two areas (area 05, and area 06) of Texas into a raster for each day (Feb 7th and 16th).
 
-```{r}
-# #loading night light rasters for feb 7
- feb705 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021038.h08v05.001.2021039064328.tif"))
- feb706 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021038.h08v06.001.2021039064329.tif"))
-# #loading night light rasters for feb 16
-feb1605 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021047.h08v05.001.2021048091106.tif"))
-feb1606 <- raster(here::here("data", "VNP46A1", "VNP46A1.A2021047.h08v06.001.2021048091105.tif"))
-```
-
 I now need to reclassify the difference raster, to assume that any location which experienced a drop of more than 200 nW cm-2sr-1 also experienced a blackout.
 
 ```{r}
+#loading in raster data from the two plots over two days
 t7_05  <- terra::rast(here::here("data","VNP46A1","VNP46A1.A2021038.h08v05.001.2021039064328.tif"))
 t7_06  <- terra::rast(here::here("data","VNP46A1","VNP46A1.A2021038.h08v06.001.2021039064329.tif"))
 t16_05 <- terra::rast(here::here("data","VNP46A1","VNP46A1.A2021047.h08v05.001.2021048091106.tif"))
 t16_06 <- terra::rast(here::here("data","VNP46A1","VNP46A1.A2021047.h08v06.001.2021048091105.tif"))
-
+#merging two plots for each day
 r7  <- terra::merge(t7_05,  t7_06)
 r16 <- terra::merge(t16_05, t16_06)
-
+#combining so that they can be used over two days
 tmp7  <- tempfile(fileext = ".tif")
 tmp16 <- tempfile(fileext = ".tif")
 rast7  <- mosaic(feb706,  feb705,  fun = mean, filename = tmp7,  overwrite = TRUE)  # RasterLayer
 rast16 <- mosaic(feb1606, feb1605, fun = mean, filename = tmp16, overwrite = TRUE)  # RasterLayer
-
+#checking extent, rows, everythign looks ok
 if (!compareRaster(rast7, rast16, extent=TRUE, rowcol=TRUE, crs=TRUE, res=TRUE, stopiffalse=FALSE)) {
   rast16 <- projectRaster(rast16, rast7, method = "bilinear")
 }
 
-# 3) Difference + threshold (STILL raster, no terra objects here)
+# 3) Difference + threshold 
 diff_bool <- (rast7 - rast16) > 200     # RasterLayer TRUE/FALSE
 diff_bool[diff_bool == 0] <- NA    
 
@@ -119,51 +111,10 @@ diffvect <- terra::as.polygons(mask_t, dissolve=TRUE, na.rm=TRUE) |>
 
 ```
 
-```{r}
-# # check crs
-# st_crs(rast16) # WGS84
-# st_crs(rast7) # WGS84
-# 
-# # do the 2 extents match?
-# if(ext(rast16) == ext(rast7)){
-#   print("extents match")
-# } else{
-#   print("extents do not match")
-# }
-# 
-# #conditional difference
-# diff <- rast7 - rast16 > 200 #making a boolean
-# #making those false's NA
-# diff <- diff[diff == FALSE] <- NA
-# class(diff)
-# diff <- st_as_stars(diff)
-```
-
 Now vectorize! turning from a raster to a vector, to make a vector difference mask.
-
-```{r}
- # diffvect <- st_as_sf(diff) %>%
- #  st_make_valid()
-```
-
 Then we crop
 
 ```{r}
-#cropping to a bbox
-# crop_bbox <-st_bbox(c(
-#                      xmin = -96.5,
-#                      ymin = 29,
-#                      xmax = -94.50,
-#                      ymax = 30.5),
-# crs = st_crs(diffvect))
-# #adding that as a layer
-# crop <- st_as_sfc(crop_bbox)
-# #cropping the dataset
-# croppeddiff <- diffvect[crop,]
-# st_bbox(croppeddiff)
-# #changing the CRS
-# croppeddiff <- croppeddiff %>%
-#   st_transform('EPSG:3083')
 #transforming
 diff_ll <- st_transform(diffvect, 4326)
 
@@ -191,8 +142,6 @@ croppeddiff <- croppeddiff %>%
   st_transform('ESRI:102009')
 #buffering for within 200 meters 
 transroad <- st_buffer(transroad, 200)
-#using St_union-kills my computer, doesn't work
-#st_union(transroad,roads)
 transroadbuff <- st_union(transroad)
 
 ```
@@ -205,15 +154,24 @@ no_freeway <-st_difference(croppeddiff, transroadbuff)
 tm_shape(no_freeway)+
   tm_polygons(col='green') +
   tm_basemap('OpenStreetMap')
+#maeve needs to add a title here. 
 ```
+
 # Maps 1 and 2
+
 These maps illustrate the night light intensity before and after the first two storms
+
 ```{r}
 tmap_mode("plot") 
 
+#add a custom warning label here
+
 # Changing everyone's CRS to match
+
 r7_3083  <- terra::project(terra::rast(rast7),  "EPSG:3083", method = "bilinear")
 r16_3083 <- terra::project(terra::rast(rast16), "EPSG:3083", method = "bilinear")
+
+
 roads_3083       <- sf::st_transform(roads, 3083)
 diffvect_3083    <- sf::st_transform(diffvect, 3083)
 croppeddiff_3083 <- sf::st_transform(croppeddiff, 3083)
@@ -266,7 +224,9 @@ m_nohwy <- tm_shape(no_highway_3083) +
 tmap_arrange(m_before, m_after, m_mask, m_nohwy, ncol = 2)
 
 ```
+
 # Map of homes in Huston that lost power
+
 ```{r}
 #filtering for homes that lost power
 #subtracting R7-R16 (m_difference)
@@ -294,39 +254,90 @@ m_diff_mask <- m_difference +
 m_diff_mask
 #mapping the difference
 ```
+
 # Estimate of the number of homes in Huston that lost power
+
 ```{r}
-#| message: false
-#| warning: false
+#filtering for homes that lost power
+#subtracting R7-R16 (m_difference)
+vis_bool <- (r16_3083 - r7_3083 ) < 200  
+diff_3083 <- r16_3083 - r7_3083 
 
-# Assuming 'r' is your SpatRaster object
-# If you don't have a SpatRaster object, you can create one for testing
-vis_bool <- rast(nrows=10, ncols=10, xmin=-180, ymin=-90)
-values(vis_bool) <- 1:ncell(vis_bool)
+mm <- terra::global(vis_bool, c("min","max"), na.rm=TRUE)
+maxabs <- max(abs(mm[1,1]), abs(mm[1,2]))
+brks <- seq(-maxabs, maxabs, length.out = 11)
 
-# 1. Extract coordinates and values
-coords <- crds(vis_bool)
-vals <- values(vis_bool)
+m_difference <- tm_shape(vis_bool) +
+  tm_raster(
+    title   = expression("Homes that lost power (Feb 16 - Feb 7)"),
+    breaks  = brks, style="pretty",
+    palette = "-RdPu"  
+  ) +
+  tm_shape(roads_3083) + tm_lines(col = "black", lwd = 0.6) +
+  tm_layout(frame = FALSE)
 
-# 2. Combine into a data frame
-vis_bool_df <- data.frame(X = coords[,1],
-                 Y = coords[,2],
-                 Value = vals)
+mask_gt200_3083 <- terra::ifel(vis_bool > 200, 1, NA)
 
-# 3. Write to CSV
-write.csv(vis_bool_df, "vis_bool_df.csv", row.names = FALSE)
+m_diff_mask <- m_difference +
+  tm_shape(mask_gt200_3083) + tm_raster(alpha=0.35, palette=c("#000000"), legend.show=FALSE) +
+  tm_layout(
+    frame = FALSE,
+    main.title = "Homes in Huston which lost power",
+    main.title.size = 1.2
+  )
 
-vis_bool %>% 
-  group_by(grade) %>% 
-   summarise(Percent = round((n() / 8988) * 100, 1)) %>% #number of observations in the group, divided by total rows, multiplied by 100, and rounded to 1 decimal place
-  mutate(Percent = paste0(Percent, "%")) %>% 
-  rename(HOLC_Grade = grade) %>%   # capitalizing
-  st_drop_geometry() %>% 
-  # creating the table
-  kbl(booktabs = T, caption = "Proportion of Census Block groups") %>%
-  kable_styling(latex_options = "striped")
+m_diff_mask
+
 ```
+
 # (GG)Plot comparing the distributions of median household income for census tracts that did and did not experience blackouts
+This portion I'm taking the data which shows where the blackouts were, and then plotting the median household income of those that did and didn't experience blackouts.
+
+First I calculate the median income using the 'tidy census' package
+
 ```{r}
+#calculating median income
+income_median <- get_acs(
+  geography = "tract", #by census tract
+  variables = "B19013_001",   #income data
+  state = "TX",               #state 
+  year = 2019 #year
+)
 ```
+
+Then I take the geometry of the houses that had the blackouts, and combine that geometry and the true/false boolean with the income data with a left join
+
+```{r}
+#taking the geometry of the houses who had blackouts 
+geo$blackout <- terra::extract(mask_gt200_3083, geo, fun = mean, na.rm = TRUE)[, 2]
+#replacing NAs with 0s
+geo$blackout <- ifelse(is.na(geo$blackout), 0, 1)
+#keeping just the geoid and the estimate
+income_median <- income_median[, c("GEOID", "estimate")]
+names(income_median)[2] <- "median_income"
+#connecting geo and income
+geo <- geo %>%
+  left_join(income_median, by = "GEOID")
+```
+
+then I plot the whole thing in a ggplot
+
+```{r}
+#plotting
+ggplot(geo, aes(x = median_income, fill = as.factor(blackout))) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 30) +
+  scale_fill_manual(
+    values = c("0" = "#E69F00", "1" = "#56B4E9"),
+    name = "Blackout",
+    labels = c("No", "Yes")
+  ) +
+  labs(
+    x = "Median Household Income ($)",
+    y = "Count",
+    title = "Income Distribution for Census Tracts\nby Blackout Experience"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
 # Result Summary
+This document calculates the different effects of large scale climate weather events on different socioeconomic groups through the mapping of the 2020 Huston blackouts, caused by an unprecedentedly large snow storm. A total of over 6,000 homes lost power, primarily in low income areas (a median income of approximately \$50,000). These patterns illustrate that low income households appear to bear the brunt of the impacts of large scale climate events, and higher income households are more resillient to the negative effects of climate change
