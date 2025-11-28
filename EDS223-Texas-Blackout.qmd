@@ -359,7 +359,7 @@ d1_hou <- st_crop(d1_stars, hou_bbox)
 d2_hou <- st_crop(d2_stars, hou_bbox)
 
 # Put roads in same CRS, crop them 
-roads_ll  <- st_transform(roads_3083, st_crs(d1_stars))
+roads_ll  <- st_transform(road_trans, st_crs(d1_stars))
 roads_hou <- st_crop(roads_ll, hou_bbox)
 
 
@@ -373,7 +373,7 @@ m_before <- tm_shape(d1_hou) +
     palette = pal_radiance,
     title   = "Radiance (Feb 7)"
   ) +
-  tm_shape(roads_3083) + tm_lines(col = "grey30", lwd = 0.6) +
+  tm_shape(road_trans) + tm_lines(col = "grey30", lwd = 0.6) +
   tm_layout(
     main.title = "Areas in Houston With Electricity: Before Storm",
     frame      = FALSE
@@ -387,7 +387,7 @@ m_after <- tm_shape(d2_hou) +
     palette = pal_radiance,
     title   = "Radiance (Feb 16)"
   ) +
-  tm_shape(roads_3083) + tm_lines(col = "grey30", lwd = 0.6) +
+  tm_shape(road_trans) + tm_lines(col = "grey30", lwd = 0.6) +
   tm_layout(
     main.title = "Areas in Houston With Electricity: After Storm",
     frame      = FALSE
@@ -493,18 +493,6 @@ combined_census
 ```{r}
 nrow(homes_in_blackout) # 138,400
 ```
-
-# (GG)Plot comparing the distributions of median household income for census tracts that did and did not experience blackouts
-```{r}
-#figuring out the class of the difference mask
-class(vis_bool) #its a terra function
-#making it so that its a 1, NA terra object
-mask_gt200_3083 <- terra::ifel((r16_3083 - r7_3083) > 200, 1, NA)
-#counting the amount of NAs
-terra::global(!is.na(mask_gt200_3083), fun = "sum")
-```
-
-The number of homes in Huston that lost power is 6,425
 
 # (GG)Plot comparing the distributions of median household income for census tracts that did and did not experience blackouts
 
