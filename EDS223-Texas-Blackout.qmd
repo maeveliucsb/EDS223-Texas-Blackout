@@ -15,7 +15,6 @@ toc: TRUE
 
 ### Read Me Screenshot
 
-![Screenshot of Readme](ReadmeScreenshot.png)
 
 ### Loading Packages
 
@@ -34,61 +33,57 @@ library(patchwork) # combine plots
 library(stars) # rasters
 library(terra) # rasters
 library(tidycensus) #for income data later
+```
+### Reading in Data
+This portion reads in the lights data using read_stars, there are two tiles per day for each half of Huston, creating a total of 4 data frames to read in. 
+
+```{r}
 # load in data 
 
-#..........................Night lights..........................
-## read_stars for the raster data!
-## VIIRS data
-
-# tile 5 date 1
+# t5 date 1
 tile5_2.7 <- read_stars(here::here("data","VNP46A1", "VNP46A1.A2021038.h08v05.001.2021039064328.tif"),
                quiet = TRUE) # hide the message
 
-# tile 6 date 1
+# t6 date 1
 tile6_2.7 <- read_stars(here::here("data",
 "VNP46A1",
 "VNP46A1.A2021038.h08v06.001.2021039064329.tif"),
                quiet = TRUE) # hide the message
 
-# tile 5 date 2
+# t5 date 2
 tile5_2.16 <- read_stars(here::here("data","VNP46A1", "VNP46A1.A2021047.h08v05.001.2021048091106.tif"),
                quiet = TRUE) # hide the message
 
-# tile 6 date 2
+# t6 date 2
 tile6_2.16 <- read_stars(here::here("data","VNP46A1", "VNP46A1.A2021047.h08v06.001.2021048091105.tif"),
                quiet = TRUE) # hide the message
 
-#..............................Roads.............................
+```
 
-# roads: gis_osm_roads_free_1.gpkg
+This portion reads in the roads data, I'll use this later to isolate the effect of the blackout. 
+
+```{r}
 road <- st_read(here::here("data", "gis_osm_roads_free_1.gpkg"),
-# from homework tip, only load needed data
 query = "SELECT * FROM gis_osm_roads_free_1 WHERE fclass='motorway'", 
 quiet = TRUE) %>% # hide the message
   st_make_valid() # valid geo
-
-#.............................Houses.............................
+```
+This portion reads in the house/residential data, this will be used later to identify what houses lost power. 
+```{r}
 
 house <- st_read(here::here("data", "gis_osm_buildings_a_free_1.gpkg"),
-# use SQL query to only read in data we need (given in the hw instructions)
-# The buildings geopackage includes data on many types of buildings; 
-# we can avoid reading in data we don’t need:
  query = "SELECT *
     FROM gis_osm_buildings_a_free_1 
     WHERE (type IS NULL AND name IS NULL)
     OR type in ('residential', 'apartments', 
-'house', 'static_caravan', 'detached')", 
+'house', 'static_caravan', 'detached')", #loading in only the home data
               quiet = TRUE) %>% # hide the message
-               st_make_valid() # valid geo
+              st_make_valid() # valid geo
+```
 
-#..........................Socioeconomic.........................
+This final data portion reads in the Socioeconomic data, because the file is so big, I've loaded in the geometry, the income and the meta data, to make it easier to maneuver. 
 
-# Socioeconomic: folder ACS_2019_5YR_TRACT_48.gdb is an ArcGIS “file geodatabase”, a multi-file proprietary format that’s roughly analogous to a GeoPackage file
-
-## use st_layers() to explore the contents of the geodatabase, because geodatabases has layers
-# st_layers(here::here("data","ACS_2019_5YR_TRACT_48_TEXAS.gdb")) # takes a whole to run, long output, commented out
-# important finds: X19_INCOME, TRACT_METADATA_2019, ACS_2019_5YR_TRACT_48_TEXAS
-
+```{r}
 # geography layer
 geo <- st_read(here::here("data", "ACS_2019_5YR_TRACT_48_TEXAS.gdb"),
    layer = "ACS_2019_5YR_TRACT_48_TEXAS", # specify the layer to read in
@@ -113,213 +108,155 @@ meta <- st_read(here::here("data", "ACS_2019_5YR_TRACT_48_TEXAS.gdb"),
 ```
 
 
-###  Creating a blackout mask
+### Making the blackout mask
 
-This portion creates a mask that shows if a Texas cell had a blackout.In order to do this  I  need to find the change in night lights caused by the storm, which means I have to to make a raster object for each day. To do this I combine light data from two areas (area 05, and area 06) of Texas into a raster for each day (Feb 7th and 16th).
+This portion creates a mask that shows if a Texas cell had a blackout. In order to do this I need to find the change in night lights caused by the storm, which means I have to to make a raster object for each day. To do this I combine light data from two areas (area 05, and area 06) of Texas into a raster for each day (Feb 7th and 16th).
 
-I now need to reclassify the difference raster, to assume that any location which experienced a drop of more than 200 nW cm-2sr-1 also experienced a blackout.
+First I combine the two tiles for days 1 and 2, and then check to make sure the CRSs are the same, so we can work with them together. 
 
 ```{r}
 # combine tiles 5 and 6 for feb 7th
-d1_stars <- st_mosaic(tile5_2.7, tile6_2.7)
+d1 <- st_mosaic(tile5_2.7, tile6_2.7)
 # combine tiles 5 and 6 for feb 16th
-d2_stars <- st_mosaic(tile5_2.16, tile6_2.16)
-#maeve note-make custom warning, error message
-# check crs
-# st_crs(d1_stars) # WGS84
-# st_crs(d2_stars) # WGS84
+d2 <- st_mosaic(tile5_2.16, tile6_2.16)
+
+#checking CRS!
+
+if(st_crs(d1) == st_crs(d2)) {
+  print("CRS's are the same!")
+} else{
+  d2_stars <- st_transform(d1_stars, crs = st_crs(d1))
+}
+
 ```
 
-### roads explore & wrangle
-
-This is a sf dataframe with lines of roads that intersect the Houston metropolitan area. I will do some exploration of the data characteristics like looking at the class, whether the geometry is valid, geometry type, and crs. 
+In this portion I take the income data, and I keep only the GEOID and median income (for all households) row (Short name: B19113e1, pulled from the meta data, long name: "MEDIAN FAMILY INCOME IN THE PAST 12 MONTHS (IN 2019 INFLATION-ADJUSTED DOLLARS): Median family income in the past 12 months (in 2019 inflation-adjusted dollars): Families"). I then filter
 
 ```{r}
-# road exploration
-class(road) # make sure it is an "sf" "data.frame"
-unique(st_is_valid(road)) # true
-unique(st_geometry_type(road)) # lines
-# st_crs(road) # check crs: WGS84 
+
+#looking for the right variable in the meta data
+meta_income <- meta |>
+  mutate(full_name_clean = make_clean_names(Full_Name)) |>
+  filter(
+    str_detect(full_name_clean, "median") &
+    str_detect(full_name_clean, "income") &
+    str_detect(full_name_clean, "inflation_adjusted")
+  )
+
+# looking at the columns, there are a TON
+#meta_income |> select(Short_Name, Full_Name) commented out because its so long
+
+#I picked B19113m1, which seemed the most appropriate "MEDIAN FAMILY INCOME IN THE PAST 12 MONTHS (IN 2019 INFLATION-ADJUSTED DOLLARS): Median family income in the past 12 months (in 2019 inflation-adjusted dollars): Families"
+income_filtered <- income |>
+  transmute(
+    GEOID,
+    median_income_inflation_adj = B19113e1
+  )
+
+
+#I then make sure that it keeps its geometry based on the 'shape' column, for some reason it was giving me an error that it wasn't spatial.
+geo <- st_as_sf(
+  geo,
+  wkt = "Shape"
+)
+
+# Making income filtered, and my geometry data one data frame which live together
+se <- geo |>
+  left_join(income_filtered, by = "GEOID") |>
+  st_make_valid() |>
+  st_transform("EPSG:4326")
+class(se) # Has become spatial
 ```
 
-### house explore & wrangle
 
-This is an sf data frame with polygons of houses in the Houston area. I'll do some more exploration like looking at the class, whether the geometry is valid, geometry type, and crs. 
+## Difference
 
-```{r}
-# house
-class(house) # make sure it is an "sf" "data.frame"
-colnames(house) # for fun what kind of data do we have here
-unique(st_is_valid(house)) # true, good
-unique(st_geometry_type(house)) # multipolygon
-```
-
-### socioeconomic explore & wrangle
-
-I have 2 data objects that I will need to explore and merge here: `geo_layer` and `income`! My overarching goal is to make one sf data frame with geographic data and income data for each row. I will join on the `geo_id`. I then need to know what column from the income layer to keep! I explored the metadata and determined the column that will help me get at median household income is (after cleaning the formatting of the name): `median_family_income_in_the_past_12_months_in_2019_inflation_adjusted_dollars_median_family_income_in_the_past_12_months_in_2019_inflation_adjusted_dollars_families_estimate`. I will use that column in the income data frame, and rename it to something more intuitive like median_income_inflation_adj. 
-
-Then, I will make the dataframe spatial again. 
+In this portion, I take day 1 and day 2 data, and I identify the difference from the two. I then the values that are less than 200 radiance in a boolean (less than 200 = false, more than 200 = true), and set all the falses to NA, this allows me to see where light intensity dropped. 
 
 ```{r}
-# whittle down metadata
-meta_whittled <- meta %>% # pipe in metadata df I read in in the beginning
-      mutate(
-    full_name_clean = make_clean_names(Full_Name)) %>% # clean the values of the Full_Name df and save to column full_name_clean
-    filter(str_detect( # filter for a specific value 
-    full_name_clean, # in this column
-    regex( # this is the value
-      "median_family_income_in_the_past_12_months_in_2019_inflation_adjusted_dollars_median_family_income_in_the_past_12_months_in_2019_inflation_adjusted_dollars_families_estimate",
-      ignore_case = TRUE))) # ignore upper vs lower case
 
-# Now make an object with the name of the column with income data to keep
-column_to_keep <- meta_whittled$Short_Name
-column_to_keep # the column is named B19113e1
+# Difference raster
+diff <- d1 - d2
 
-# only keep columns of interest in income df
-income_filtered <- income %>%
-  dplyr::select(GEOID, 
-                all_of(column_to_keep)) %>% # keep only the geoid column and column B19113e1 (aka the column to keep)
-  rename(median_income_inflation_adj = all_of(column_to_keep)) # rename the column
+# subtracting for less than 200
+diff_stars <- d1 - d2 > 200
 
-# left join to make socioeconomic (se) df
-se <- income_filtered %>% 
-  left_join(geo, by = "GEOID") %>% 
-  relocate(Shape, .after = GEOID) # move geo to after thegeo id
-
-# check the class
-class(se) # not spatial!
-
-# make spatial again
-se <- se %>% 
-  st_as_sf() %>% # as sf
-  st_make_valid() %>% # valid geo
-  st_transform("EPSG:4326") # to match
-class(se) # now spatial!
-# st_crs(se) # EPSG:4326 
-```
-
-# 1. Create blackout mask
-
-## 1.1 difference raster
-
-I want to find the change inlights intensity caused by the storm. To do this, I'll use the February 7th and 16th rasters I made above with St_Mosaic. These rasters are called `d1_stars` (day 1, and in before the blackout) and `d2_stars` (day 2, and in during the blackout)
-
-To find the change, I will do subtraction: Feb 7 (no blackout aka more light aka day 1) - Feb 16 (blackout aka day 2). I want where the difference is greater than 200, so the values > 200 = TRUE for a blackout.
-
-Then I will reclassify the difference raster, assuming that any location that experienced a drop of more than 200 nW cm-2sr-1 experienced a blackout. 
-
-
-```{r}
-# checked same crs in the data exploration and cleaning phase
-# check extent (need same extent to do raster math)
-st_bbox(d1_stars)
-st_bbox(d2_stars) # yay same
-
-# lets make a difference raster showing the values of the differences
-diff_for_vis <- d1_stars - d2_stars 
-
-# subtraction "difference raster" and the boolean TRUE FALSE for > 200
-diff_stars <- d1_stars - d2_stars > 200
-
-# set the False (less than 200 difference) to NA
+# set the FALSE (less than 200) to NA
 diff_stars[diff_stars==FALSE] <- NA
 
 ```
 
-## 1.2 vectorize the blackout mask
+# Vectorizing
 
-I want to vectorize this mask, so turn it from a raster into a vector. I will use `st_as_sf()` to convert from a raster to a vector and then I will  fix any invalid geometries with `st_make_valid()`. I can check validity using `st_is_valid`. 
+This portion turns the raster into a vector, and fixes invalid geometry. Then I just use st_is_valid to make sure all the geometries are valid.
 
 ```{r}
-# vectorize and make valid
-diff_v <- st_as_sf(diff_stars) %>% # make it sf
-  st_make_valid() # ensure valid geo
-
-unique(st_is_valid(diff_v)) # check it is valid
-
-# quick exploration
-class(diff_v) # its an sf dataframe
-# st_crs(diff_v) # "EPSG",4326 still, good
+diff_vect <- st_as_sf(diff_stars) %>% 
+  st_make_valid() 
 ```
 
-Now we have a vector difference mask!
-## 1.3 crop blackout mask
 
-Nest, we will crop (spatially subset) the blackout mask to the Houston area as defined by the following coordinates:
-(-96.5, 29), (-96.5, 30.5), (-94.5, 30.5), (-94.5, 29)
+# Cropping
 
-Note: st_bbox needs to be converted (vectorized) into layer after
+This portion crops the blackout mask to the Huston area, using these coordinates: (-96.5, 29), (-96.5, 30.5), (-94.5, 30.5), (-94.5, 29) then it is vectorized into a layer. 
 
 ```{r}
-# make a bbox with the min and max from the coordinates
-crop_bbox <- st_bbox(c( # set my bbox
+# mmaking a bbox
+crop_bbox <- st_bbox(c( 
   xmin = -96.5,
   ymin = 29,
   xmax = -94.5,
   ymax = 30.5),
-  crs = st_crs(diff_v)) # ensure same crs
-
-# check the class of the bbox
-class(crop_bbox) # it's bbox
+  crs = st_crs(diff_vect)) # ensure same crs as the difference vector
 
 # convert into a layer
-crop <- st_as_sfc(crop_bbox) # gotta make it a layer
-class(crop) # yay now an sf
+crop <- st_as_sfc(crop_bbox) # then i make it a layer
 
 # check extent
-st_bbox(crop) # woohoo, matches the coords I wanted
+st_bbox(crop)
 
 ## now crop the actual blackout mask
-# gonna use brackets to subset
-diff_crop <- diff_v[crop, ] # keep all rows that spatially intersect with the crop  
-# check extent
-st_bbox(diff_crop) # sweet
+
+diff_crop <- diff_vect[crop, ] # keep all rows that intersect with the crop  
 ```
 
-## 1.4 re-project cropped dataset
-
-Now let's re-project the cropped blackout dataset to EPSG:3083 (NAD83 / Texas Centric Albers Equal Area). We can use `st_transform` for this. 
+# Re-projecting
+This portion re-projects the cropped dataset to EPSG:3083 using st_transform
 
 ```{r}
-# use st_transform
-diff_crop <- diff_crop %>% 
+croppeddiff <- diff_crop %>%
   st_transform("EPSG:3083")
 ```
-# 2. Exclude highways from the cropped blackout mask
 
-exclude any locations within 200 meters of all highways in the Houston area
+# Excluding Freeways
 
-## 2.1 buffer close to highway
+This portion begins the freeway exclusion portion. Because road lights vary significantly independently of blackouts, they will skew our data and make it difficult to see the extent of the blackout. 
 
-I need to identify areas within 200m of all highways, so I will check my crs, ensure the units is meters, and then make a buffer using `st_buffer` with a distance of 200. 
+In order to do this, I start by transforming the road so that the CRS matches all the other work I've done (croppeddiff), then I buffer by 200 meters around the road. 
 ```{r}
-# set to same crs "EPSG:3083" as the diff_crop
 road_trans <- road %>% 
-  st_transform("EPSG:3083") # transform to a projection with meters
+  st_transform("EPSG:3083") 
 
-# create
-road_buffer_200m <- st_buffer(road_trans, dist = 200) # Create 200 m buffer around roads
+# Buffering
+road_buffer_200m <- st_buffer(road_trans, dist = 200)
 ```
-## 2.2 St_union the buffer
-
-Next I will `st_union` to combine all the geometries created when making a buffer into one nice polygon buffer. This makes for one continuous polygon buffer. 
+I then combine all the little buffers into one big polygon buffer so that its easier to work with 
 
 ```{r}
-# take overlapping geometries in the building of the buffer into one nice polygon
 road_buffer_200m <- st_union(road_buffer_200m)
 ```
 
-## 2.2 outside the buffer
+Now, with the buffer, I find spaces that have experienced blackouts and are also farther than 200 meters from the freeway. This should allow me to visualize the extent of the blackout without interference. 
 
-Now I find areas that experienced blackouts that are ALSO further than 200m from a highway
+I'm going to take observations from outside the buffer layer by taking the difference of the buffered road polygon from the cropped difference blackout areas I made previously. 
 
-We want things OUTSIDE the buffer layer, so use `st_difference`, this will be like st_intersection which will return the areas that do not intersect. I will call this `no_highway` and will make it a polygon of the area of the difference_crop (aka the blackout areas) that is not in the buffer around the highways. 
 ```{r}
 # outside the buffer
-no_freeway <- st_difference(diff_crop, road_buffer_200m) # creates polygon of the area of x not in y
-```
+no_freeway <- st_difference(croppeddiff, road_buffer_200m) # creates polygon of the area of x not in y
 
-This map visualizes the amount of homes likely impacted by blackouts
+```
+# Homes impacted by blackouts. 
+using all of the above information, now I can make a map of the homes in Huston likely impacted by blackouts
 
 ```{r}
 
@@ -335,37 +272,26 @@ tm_shape(no_freeway) +
 
 # Maps 1 and 2
 
-These maps illustrate the night light intensity before and after the first two storms
+This portion creates maps which illustrate the night light intensity before and after the storms in radiance. 
 
-These maps illustrate the night light intensity before and after the first two storms. The top two maps illustrate radiance before the storm (Feb 7) and after the storm (Feb 16). These maps illustrate the scope of the blackouts during the February storms.
-
+In order to do this properly, I first need to crop each day data set to the bbox we used before, then I transform the road CRS and crop that as well. Then finally to ensure that the difference is visible, I create a custom palette using Viridis Mako, but amended slightly such that the contrast is more clear. 
 
 ```{r}
 tmap_mode("plot") 
-
-# Cropping d1/2_stars to be tighter around Huston
-hou_bbox <- st_bbox(
-  c(
-    xmin = -96.5,
-    xmax = -94.5,
-    ymin = 28.5,
-    ymax = 31
-  ),
-  crs = st_crs(d1_stars)
-)
-
-# Croping  rasters to that bbox
-d1_hou <- st_crop(d1_stars, hou_bbox)
-d2_hou <- st_crop(d2_stars, hou_bbox)
+# Cropping rasters to that bbox-for the purpose of building Vis. 1, cropping days 1/2 visualization data
+d1_hou <- st_crop(d1, crop_bbox)
+d2_hou <- st_crop(d2, crop_bbox)
 
 # Put roads in same CRS, crop them 
-roads_ll  <- st_transform(road_trans, st_crs(d1_stars))
-roads_hou <- st_crop(roads_ll, hou_bbox)
+roads_ll  <- st_transform(road_trans, st_crs(d1))
+roads_hou <- st_crop(roads_ll, crop_bbox)
 
 
 # palette with no true black-shows the contrast better
 pal_radiance <- mako(9, begin = 0.2, end = 1)
 
+
+#building the maps
 m_before <- tm_shape(d1_hou) +
   tm_scalebar() +
   tm_raster(
@@ -399,149 +325,118 @@ tmap_arrange(m_before, m_after, ncol = 2)
 
 # Map of homes in Huston that lost power by Census tract
 
+This portion then analyzes the impact of the blackout by census tract. This enables an environmental justice perspective on how different census tracts experienced the impacts of the storm. 
+
+First I transform the CRS of my house data set, and fix any invalid geometries. Then I filter to make sure that none are within my road polygons data set. I then add a column which indicates if a house did or did not experience a blackout (Y if they did). I then pull the osm_id to filter. 
 
 ```{r}
 house_trans <- house %>% 
    st_transform("EPSG:3083") %>% 
   st_make_valid()
-#st_crs(house_trans) # EPSG:3083
-#st_crs(no_highway) # EPSG:3083
 
 # homes in the blackout area
-homes_in_blackout <- st_filter(house_trans, no_freeway, .predicate = st_within) %>% 
+blackedout <- st_filter(house_trans, no_freeway, .predicate = st_within) %>% 
   mutate(blackout = "Y") # column saying this home did experience a blackout
-nrow(homes_in_blackout) # 138,404
-unique(st_is_valid(homes_in_blackout)) # TRUE
 
-# blackout home id's for filtering
-blackout_home_ids <- unique(homes_in_blackout$osm_id)
+#checking to make sure that everything is done right! 
+nrow(blackedout) # 138,404
+unique(st_is_valid(blackedout)) # TRUE
 
+# OSM Ids for filtering. 
+blackout_ids <- unique(blackedout$osm_id)
+```
+
+In this portion I identify the amount of homes not affected by the blackouts doing the same thing as before, but filtered inversely (taking the blackout home IDs and omitting them, and any homes that remain get tagged with an N in the blackout column)
+```{r}
 # homes not affected will be the rest of the homes
-homes_not_affected <- house_trans %>% 
- filter(!osm_id %in% blackout_home_ids) %>% 
-  mutate(blackout = "N") # column saying this home did not experience a blackout
-nrow(homes_not_affected) # 327054
+alight <- house_trans %>% 
+ filter(!osm_id %in% blackout_ids) %>% 
+  mutate(blackout = "N") 
 
-# now let's make one megadataframe with all homes in Houston area that are not within 200m of a highway and whether they were in blackout y or n
-# i will use the good ol reliable bind_rows
-homes_blackout_yn <- bind_rows(homes_in_blackout, homes_not_affected)
+nrow(alight) # looking at how many homes remained alight
+```
+This portion combines both the blacked out data and the alight data with the all homes in Huston (not within 200 meters of the freeway). I then check to make sure they all have the same CRS, and then comine it with the socioeconomic data. 
+```{r}
+homes_blackout_yn <- bind_rows(blackedout, alight)
 
 # check and ensure crs
-se <- se %>% 
-   st_transform("EPSG:3083") %>% # correct crs
-  st_make_valid() # valid geometry
+se <- se %>%
+   st_transform("EPSG:3083") %>% 
+  st_make_valid() 
 
-# first let's pull all se data for all the homes into one df
+# adding all the homes info with SE data
 homes_allinfo <- st_join(homes_blackout_yn, se, # join the two
-                         join = st_within, left = TRUE) #if it is within, then keep it
+                         join = st_within, left = TRUE) 
+```
 
+I then bring that into a tract level summary. I first drop all the geometry, filter NAs and group by geoID. Then I summarize the amount of homes in the tract, how many had blackouts, and a dummy variable for visibility. 
+
+```{r}
 census_lvl <- homes_allinfo %>% 
   st_drop_geometry() %>% # for wrangling
   filter(!is.na(GEOID)) %>% 
  group_by(GEOID) %>%
   summarize(
     n_homes = n(), # how many homes in the tract
-    n_blackout = sum(blackout == "Y", na.rm = TRUE), # how many homes in the tract had blackout
-    pct_blackout = (n_blackout / n_homes * 100), # pct of blacked out homes
-    blackout_yn   = if_else(n_blackout > 0, "Y", "N"), # yes or no for vis
+    n_blackout = sum(blackout == "Y", na.rm = TRUE), # how many had blackout
+    blackout_yn   = if_else(n_blackout > 0, "Y", "N"), # yes or no 
   .groups = "drop")
+```
+Then I join the tract level stats back into spatial level data frames. 
+```{r}
 
-# now let's pull the data back into the the se df
 census_lvl_spatial <- left_join(se, census_lvl, by = "GEOID") %>%
-  filter(!is.na(n_homes)) # only keep census blocks with homes in Houston
+  filter(!is.na(n_homes)) 
 
 ```
 
-## 4.3 summarize census tracts that lost power
+This portion creates the map!
 ```{r}
 map_census <- tm_basemap("Esri.WorldGrayCanvas") +
   tm_graticules() +
   tm_shape(census_lvl_spatial, bbox = st_bbox(homes_blackout_yn)) +
-    tm_borders(col = "grey40") +
+    tm_borders(col = "white") +
     tm_polygons(
       fill = "blackout_yn",
-      fill.scale = tm_scale(values = c("white", "black")),
+      fill.scale = tm_scale(values = c("white", "magenta")),
       fill.legend = tm_legend(
         title = "Presence of blackout",
         position = tm_pos_out("right")
       )) +
-  tm_title("(A) Census Tracts that Experienced any Blackout in Houston in 2021")
+  tm_title("Census Tracts that Experienced a Blackout in Houston in 2021")
 
-map_census_pct <- tm_basemap("Esri.WorldGrayCanvas") +
-  tm_graticules() +
-  tm_shape(census_lvl_spatial, bbox = st_bbox(homes_blackout_yn)) +
-    tm_borders(col = "grey40") +
-    tm_polygons(
-      fill = "pct_blackout",
-      fill.legend = tm_legend(
-        title = "Homes blacked out (%)",
-        position = tm_pos_out("right")
-      )) +
-  tm_title("(B) Percent of Homes Within Census Tracts that Experienced any Blackout in Houston in 2021")
-
-combined_census <- tmap_arrange(map_census, map_census_pct,
-             ncol = 1)
-
-# save plot
-# tmap_save(combined_census,filename = "figs/combined_census.png", width = 8, height = 6, units = "in", dpi = 300)
-
-combined_census
+map_census
 ```
 
 # Estimate of the number of homes in Huston that lost power
+To do this, I just take the total row count of the number of homes in Huston that lost power. The total homes in Huston which lost power are 138,400
 
 ```{r}
-nrow(homes_in_blackout) # 138,400
+nrow(blackedout) # 138,400
 ```
 
 # (GG)Plot comparing the distributions of median household income for census tracts that did and did not experience blackouts
 
+This portion I'm taking the data which shows where the blackouts were, and then plotting the median household income of those that did and didn't experience blackouts. 
 
-This portion I'm taking the data which shows where the blackouts were, and then plotting the median household income of those that did and didn't experience blackouts.
-
-First I calculate the median income using the 'tidy census' package
-
-```{r}
-#calculating median income
-income_median <- get_acs(
-  geography = "tract", #by census tract
-  variables = "B19013_001",   #income data
-  state = "TX",               #state 
-  year = 2019 #year
-)
-```
-
-I do something.
-then I plot the whole thing in a ggplot
+To do this I combine the census level information, and drop the geometry to make it easier to work with. I then take the median income row I pulled from the meta data earlier, with the blackout information, and then plot them as overlapping histograms. 
 
 ```{r}
-income_median <- get_acs(
-  geography = "tract",       # by census tract
-  variables = "B19013_001",  # income data
-  state = "TX",
-  year = 2019
-) %>%
-  st_drop_geometry() %>%     # no need for geometry here
-  transmute(
-    GEOID,
-    median_income = estimate
-  )
-# Prepare tract-level data with ACS median income and blackout indicator
-hist_df <- census_lvl_spatial %>%
-  st_drop_geometry() %>%
-  filter(!is.na(median_income_inflation_adj)) %>%
-  mutate(
-    # 1 if any home in the tract lost power, 0 otherwise
-    blackout = if_else(n_blackout > 0, "Yes", "No")
-  )
-
 ggplot(
-  hist_df,
-  aes(x = median_income_inflation_adj, fill = blackout)
+  census_lvl_spatial |> st_drop_geometry(),  # drop geometry for safety
+  aes(
+    x    = median_income_inflation_adj,
+    fill = blackout_yn
+  )
 ) +
-  geom_histogram(position = "identity", alpha = 0.5, bins = 30) +
+  geom_histogram(
+    position = "identity",
+    alpha    = 0.5,
+    bins     = 30
+  ) +
   scale_fill_manual(
-    values = c("Yes" = "#E69F00", "No" = "#ff00ff"),
+    values = c("Y" = "#E69F00", "N" = "#ff00ff"),
+    labels = c("Y" = "Yes", "N" = "No"),  # legend labels
     name   = "Blackout"
   ) +
   labs(
@@ -550,6 +445,7 @@ ggplot(
     title = "Income Distribution of Houston Census Tracts\nby Blackout Experience"
   ) +
   theme_minimal(base_size = 14)
+
 ```
 
 # Result Summary
